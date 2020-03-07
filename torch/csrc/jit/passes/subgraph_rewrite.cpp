@@ -1,6 +1,6 @@
 #include <torch/csrc/jit/passes/subgraph_rewrite.h>
-#include <torch/csrc/jit/irparser.h>
-#include <torch/csrc/jit/subgraph_matcher.h>
+#include <torch/csrc/jit/ir/irparser.h>
+#include <torch/csrc/jit/ir/subgraph_matcher.h>
 
 namespace torch {
 namespace jit {
@@ -35,15 +35,22 @@ script::Module SubgraphRewriter::runOnModule(const script::Module& module) {
   return module;
 }
 
-void SubgraphRewriter::runOnGraph(std::shared_ptr<Graph>& graph) {
+void SubgraphRewriter::runOnGraph(
+    std::shared_ptr<Graph>& graph,
+    const std::function<
+        bool(const Match&, const std::unordered_map<std::string, Value*>&)>&
+        filter) {
   for (const RewritePatternDescr& pattern : patterns_) {
-    rewriteSinglePatternOnGraph(graph, pattern);
+    rewriteSinglePatternOnGraph(graph, pattern, filter);
   }
 }
 
 void SubgraphRewriter::rewriteSinglePatternOnGraph(
     std::shared_ptr<Graph>& graph,
-    RewritePatternDescr pattern) {
+    const RewritePatternDescr& pattern,
+    const std::function<
+        bool(const Match&, const std::unordered_map<std::string, Value*>&)>&
+        filter) {
   std::unordered_map<Value*, Value*> rewrite_map;
   std::vector<Value*> values_to_rewrite;
 
@@ -56,6 +63,9 @@ void SubgraphRewriter::rewriteSinglePatternOnGraph(
 
   const auto& matches = findPatternMatches(pattern_graph, *graph);
   for (const Match& match : matches) {
+    if (!filter(match, vmap)) {
+      continue;
+    }
     // Matches might overlap with each other, in that case some of the nodes in
     // the current match might have already been used in another folded pattern.
     // We need to skip such matches.

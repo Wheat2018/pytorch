@@ -1,7 +1,7 @@
 #include "test/cpp/jit/test_base.h"
 #include "test/cpp/jit/test_utils.h"
-#include "torch/csrc/jit/argument_spec.h"
-#include "torch/csrc/jit/autodiff.h"
+#include "torch/csrc/jit/runtime/argument_spec.h"
+#include "torch/csrc/jit/runtime/autodiff.h"
 #include "torch/csrc/jit/passes/common_subexpression_elimination.h"
 #include "torch/csrc/jit/passes/constant_propagation.h"
 #include "torch/csrc/jit/passes/create_autodiff_subgraphs.h"
@@ -11,7 +11,7 @@
 #include "torch/csrc/jit/passes/requires_grad_analysis.h"
 #include "torch/csrc/jit/passes/shape_analysis.h"
 #include "torch/csrc/jit/passes/utils/subgraph_utils.h"
-#include "torch/csrc/jit/tracer.h"
+#include "torch/csrc/jit/frontend/tracer.h"
 
 #include <ATen/ATen.h>
 #include "torch/csrc/autograd/engine.h"
@@ -54,32 +54,11 @@ variable_list get_grad_outputs(const variable_list& vars) {
   });
 }
 
-std::shared_ptr<Graph> trace(
-    const ADTestSpec& test,
-    const variable_list& vars_in) {
-  Stack input_vars = fmap<IValue>(vars_in);
-  std::vector<TypePtr> input_types;
-  input_types.reserve(input_vars.size());
-  for (size_t i = 0; i < input_vars.size(); i++) {
-    input_types.push_back(TensorType::get());
-  }
-  auto input_typeptr = TupleType::create(std::move(input_types));
-  std::shared_ptr<tracer::TracingState> state;
-  Stack trace_stack_in;
-  std::tie(state, trace_stack_in) =
-      tracer::enter(tracer::TypedStack(input_vars, input_typeptr));
-  variable_list trace_vars_in = fmap(
-      trace_stack_in, [](const IValue& v) { return Variable(v.toTensor()); });
-  auto trace_vars_out = test(trace_vars_in);
-  tracer::exit(fmap<IValue>(trace_vars_out));
-  return state->graph;
-}
-
 variable_list grad(
     const variable_list& outputs,
     const variable_list& inputs,
     const variable_list& grad_outputs) {
-  const auto get_edge = [](const Variable& v) { return v.gradient_edge(); };
+  const auto get_edge = [](const Variable& v) { return torch::autograd::impl::gradient_edge(v); };
   auto& engine = torch::autograd::Engine::get_default_engine();
   return engine.execute(
       fmap(outputs, get_edge),
@@ -146,7 +125,16 @@ void testADFormulas() {
     auto var_grads_out = grad(vars_out, vars_in, var_grads_in);
 
     // Trace and differentiate the op
-    auto graph = trace(test, vars_in);
+    auto graph = tracer::trace(
+      fmap<IValue>(vars_in),
+      [&test](Stack in) -> Stack {
+        auto ivalue_inps = fmap(in, [](const IValue& v){
+          return Variable(v.toTensor());
+        });
+        return fmap<IValue>(test(ivalue_inps));
+      },
+      [](const Variable& var) { return "";}
+    ).first->graph;
     EliminateDeadCode(graph); // Tracing of some ops depends on the DCE trick
     ConstantPropagation(graph);
     auto grad_spec = differentiate(graph);

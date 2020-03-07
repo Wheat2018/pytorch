@@ -9,6 +9,7 @@
 #include <c10/core/ScalarType.h>
 #include <c10/macros/Macros.h>
 #include <c10/util/Half.h>
+#include <c10/util/TypeCast.h>
 
 namespace c10 {
 
@@ -73,7 +74,7 @@ class C10_API Scalar {
 
   // also support scalar.to<int64_t>();
   template <typename T>
-  T to();
+  T to() const;
 
 #undef DEFINE_ACCESSOR
   bool isFloatingPoint() const {
@@ -96,6 +97,20 @@ class C10_API Scalar {
   }
 
   Scalar operator-() const;
+
+  ScalarType type() const {
+    if (isComplex()) {
+      return ScalarType::ComplexDouble;
+    } else if (isFloatingPoint()) {
+      return ScalarType::Double;
+    } else if (isIntegral(/*includeBool=*/false)) {
+      return ScalarType::Long;
+    } else if (isBoolean()) {
+      return ScalarType::Bool;
+    } else {
+      throw std::runtime_error("Unknown scalar type.");
+    }
+  }
 
  private:
     template<typename T,
@@ -129,13 +144,13 @@ class C10_API Scalar {
 
 // define the scalar.to<int64_t>() specializations
 template <typename T>
-inline T Scalar::to() {
+inline T Scalar::to() const {
   throw std::runtime_error("to() cast to unexpected type.");
 }
 
 #define DEFINE_TO(T, name)    \
   template <>                 \
-  inline T Scalar::to<T>() {  \
+  inline T Scalar::to<T>() const {  \
     return to##name();        \
   }
 AT_FORALL_SCALAR_TYPES_WITH_COMPLEX_EXCEPT_COMPLEX_HALF(DEFINE_TO)
